@@ -339,3 +339,167 @@ Then the mcp events contains:
       data: "Server started"
   """
 ```
+
+## Agent Tool Calling Testing
+
+This module also provides steps to test **MCP tool selection by LLM agents**. The idea is to verify that, given a set of tools and a conversation, an LLM correctly selects (or doesn't select) specific tools.
+
+This is useful for validating tool naming, descriptions, and discoverability in real-world agent scenarios.
+
+### Configuration
+
+The agent steps use an OpenAI-compatible chat completions API. Configure the LLM endpoint via environment variables or system properties:
+
+| Setting | Env Variable | System Property | Default |
+|---------|-------------|-----------------|---------|
+| Base URL | `LLM_BASE_URL` | `llm.base-url` | `https://api.openai.com/v1` |
+| API Key | `LLM_API_KEY` | `llm.api-key` | *(empty)* |
+
+You can also set them programmatically in a `@Before` step:
+
+```java
+import com.decathlon.tzatziki.utils.LlmClient;
+import io.cucumber.java.Before;
+
+public class MyAgentSteps {
+
+    @Before(order = -1)
+    public void setup() {
+        LlmClient.setBaseUrl("https://api.openai.com/v1");
+        LlmClient.setApiKey("sk-...");
+    }
+}
+```
+
+Any OpenAI-compatible endpoint works (OpenAI, Azure OpenAI, Anthropic, Ollama, vLLM, etc.).
+
+### Defining Tools
+
+Define the tools available to the agent. Each tool needs at least a `name` and `description`:
+
+```gherkin
+Given the following agent tools:
+  """
+  - name: orderValidatedList
+    description: Returns the list of validated orders
+  - name: orderDeliveredList
+    description: Returns the list of delivered orders
+  """
+```
+
+You can also include a `parameters` field with a JSON Schema if needed:
+
+```gherkin
+Given the following agent tools:
+  """
+  - name: getWeather
+    description: Gets the current weather for a location
+    parameters:
+      type: object
+      properties:
+        location:
+          type: string
+          description: The city name
+      required:
+        - location
+  """
+```
+
+### Running the Agent
+
+Send a conversation to an LLM model. The conversation is a list of messages with `role` (system, user, assistant) and `content`:
+
+```gherkin
+When the agent processes the conversation with "gpt-4o-mini":
+  """
+  - role: system
+    content: you are a specialist in IT support, help the users the best you can
+  - role: user
+    content: Give me my order list
+  - role: assistant
+    content: Which order you are looking for? the delivered or the one you just ordered?
+  - role: user
+    content: the delivered
+  """
+```
+
+You can use Scenario Outlines to test the same conversation against multiple LLMs:
+
+```gherkin
+Scenario Outline: Correct tool selection with <model>
+  Given the following agent tools:
+    """
+    - name: orderDeliveredList
+      description: Returns the list of delivered orders
+    """
+  When the agent processes the conversation with "<model>":
+    """
+    - role: user
+      content: Give me my delivered orders
+    """
+  Then the tool "orderDeliveredList" should have been called
+
+  Examples:
+    | model       |
+    | gpt-4o-mini |
+    | gpt-4o      |
+```
+
+### Asserting Tool Calls
+
+Assert which tools the agent decided to call (or not call):
+
+```gherkin
+# Assert a specific tool was called
+Then the tool "orderDeliveredList" should have been called
+
+# Assert a specific tool was NOT called
+And the tool "orderValidatedList" should not have been called
+
+# Assert the exact number of tool calls
+And the agent should have called 1 tool
+
+# Assert no tools were called at all
+Then the agent should not have called any tool
+```
+
+### Full Example
+
+```gherkin
+Feature: Order Management Tool Testing
+
+  Scenario: Tool should not be called when intent is ambiguous
+    Given the following agent tools:
+      """
+      - name: orderList
+        description: Orders a list of items in a store
+      """
+    When the agent processes the conversation with "gpt-4o-mini":
+      """
+      - role: user
+        content: order me the list 5,9,1,3
+      """
+    Then the tool "orderList" should not have been called
+
+  Scenario: Correct tool selected from multi-turn conversation
+    Given the following agent tools:
+      """
+      - name: orderValidatedList
+        description: Returns the list of validated orders
+      - name: orderDeliveredList
+        description: Returns the list of delivered orders
+      """
+    When the agent processes the conversation with "gpt-4o-mini":
+      """
+      - role: system
+        content: you are a specialist in IT support, help the users the best you can
+      - role: user
+        content: Give me my order list
+      - role: assistant
+        content: Which order you are looking for? the delivered or the one you just ordered?
+      - role: user
+        content: the delivered
+      """
+    Then the tool "orderDeliveredList" should have been called
+    And the tool "orderValidatedList" should not have been called
+```
